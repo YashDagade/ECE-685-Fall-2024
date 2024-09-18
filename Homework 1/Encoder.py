@@ -23,5 +23,3 @@ class extractor(nn.Module):
         x = x.view(x.size(0), -1)       
 
         return self.dim_redu(x)
-
-  
