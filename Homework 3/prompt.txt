@@ -1,3 +1,5 @@
+Okay great - let's now move onto problem 2:
+
 2 Problem 2: Optimizers from Scratch 2.1 Optimizer Implementaiton(20pts)
 In this problem, you will implement the commonly-used optimizers from scratch. Train a CNN for MNIST classification on cross-entropy loss with L1-regularization using the following optimizers. Showing the correctness of your implementation by reporting the classification accuracy of your model after training.
 1. Momentum method with parameter β = 0.9 (5 pts)
