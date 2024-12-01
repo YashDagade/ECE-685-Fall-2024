@@ -1,0 +1,546 @@
+okay so we have to do a 
+
+**Problem Statement and Project Outline:**
+
+**Title:** Progressive Growing CycleGAN for High-Resolution Image Translation  
+
+**Problem Statement:**  
+Image-to-image translation has significant applications in fields like computer vision, art generation, and style transfer. However, standard CycleGAN models often struggle with producing high-resolution outputs, especially when using unpaired datasets. Additionally, training stability and image quality deteriorate as resolution increases. This project aims to address these challenges by integrating the principles of CycleGAN and Progressive Growing GANs. By gradually increasing resolution during training, the proposed model seeks to enhance both the stability of training and the quality of high-resolution image translations. This approach could enable more realistic and detailed transformations, such as translating between different seasons (e.g., summer to winter) or artistic styles (e.g., artwork to photorealism).  
+
+**Objectives and Deliverables:**  
+
+1. **Dataset Preparation:**  
+   - Load and preprocess datasets such as CELEBA, LSUN, and CIFAR-10 to serve as the initial image domains.  
+   - Transform these datasets to mimic artistic styles (e.g., Monet and Van Gogh) by leveraging available painting datasets from Kaggle.  
+
+2. **Model Implementation:**  
+   - Design and implement a Progressive Growing CycleGAN model that starts with low-resolution image translations and gradually increases resolution by adding layers during training.  
+
+3. **Evaluation Metrics:**  
+   - Assess the model's performance using quantitative metrics such as Fréchet Inception Distance (FID) and Inception Score.  
+   - Compare the results with a baseline CycleGAN model to measure improvements in image quality and training stability.  
+
+4. **Analysis and Results:**  
+   - Conduct a detailed analysis of translation quality and training stability as resolutions increase.  
+   - Visualize and document the differences between the standard CycleGAN and the proposed Progressive Growing CycleGAN model.  
+
+**Significance:**  
+This project addresses a critical limitation of current CycleGAN implementations by introducing progressive growing techniques. The proposed model could achieve smoother transitions and finer details in high-resolution image translations, broadening the application of GANs in domains requiring high-quality outputs.  
+
+**References:**  
+1. Zhu, J. Y. et al. (2017). *Unpaired Image-to-Image Translation using Cycle-Consistent Adversarial Networks*. [Link](https://arxiv.org/pdf/1703.10593).  
+2. Karras, T. et al. (2017). *Progressive Growing of GANs for Improved Quality, Stability, and Variation*. [Link](https://arxiv.org/pdf/1710.10196).  
+
+This refined structure provides a clear and actionable roadmap for the project, focusing on problem-solving and deliverable clarity.≈
+
+
+
+
+code so far:
+
+
+
+
+import os
+import itertools
+import random
+import math
+import copy
+import time
+from PIL import Image
+import numpy as np
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+from torchvision.utils import save_image
+
+# For evaluation metrics
+from torchmetrics.image.fid import FrechetInceptionDistance
+from torchmetrics.image.inception import InceptionScore
+
+
+# Define paths
+data_root = './data'
+celeba_root = os.path.join(data_root, 'celeba', 'img_align_celeba')
+vangogh_root = os.path.join(data_root, 'vangogh', 'Van Gogh Paintings')
+
+# Verify directories exist
+assert os.path.isdir(celeba_root), f"CelebA directory not found at {celeba_root}"
+assert os.path.isdir(vangogh_root), f"Van Gogh directory not found at {vangogh_root}"
+
+# Hyperparameters
+batch_size = 1
+num_workers = 4
+initial_resolution = 4
+max_resolution = 256  # 4, 8, 16, ..., 256
+
+# Transformation: We'll define a function to update transformations based on current resolution
+def get_transform(resolution):
+    return transforms.Compose([
+        transforms.Resize(resolution, Image.BICUBIC),
+        transforms.CenterCrop(resolution),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,), (0.5,))
+    ])
+
+# Initialize Dataset and DataLoader with initial resolution
+transform = get_transform(initial_resolution)
+dataset = ImageDataset(celeba_root, vangogh_root, transform=transform)
+dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
+
+
+def weights_init_normal(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        if hasattr(m, 'weight'):
+            nn.init.normal_(m.weight.data, 0.0, 0.02)
+            if hasattr(m, 'bias') and m.bias is not None:
+                nn.init.constant_(m.bias.data, 0.0)
+    elif classname.find('BatchNorm2d') != -1 or classname.find('InstanceNorm2d') != -1:
+        if hasattr(m, 'weight') and m.weight is not None:
+            nn.init.normal_(m.weight.data, 1.0, 0.02)
+        if hasattr(m, 'bias') and m.bias is not None:
+            nn.init.constant_(m.bias.data, 0.0)
+
+def save_checkpoint(state, filename='checkpoint.pth.tar'):
+    torch.save(state, filename)
+
+def load_checkpoint(checkpoint_path, model, optimizer=None):
+    checkpoint = torch.load(checkpoint_path)
+    model.load_state_dict(checkpoint['state_dict'])
+    if optimizer:
+        optimizer.load_state_dict(checkpoint['optimizer'])
+    return checkpoint['epoch']
+
+def display_images(real, fake, title1='Real', title2='Fake'):
+    real = real.detach().cpu()
+    fake = fake.detach().cpu()
+    fig, axs = plt.subplots(1, 2, figsize=(12,6))
+    axs[0].imshow(np.transpose((real[0] * 0.5 + 0.5).numpy(), (1,2,0)))
+    axs[0].set_title(title1)
+    axs[0].axis('off')
+    axs[1].imshow(np.transpose((fake[0] * 0.5 + 0.5).numpy(), (1,2,0)))
+    axs[1].set_title(title2)
+    axs[1].axis('off')
+    plt.show()
+
+
+class ResidualBlock(nn.Module):
+    def __init__(self, in_features):
+        super(ResidualBlock, self).__init__()
+
+        self.block = nn.Sequential(
+            nn.Conv2d(in_features, in_features, 3, 1, 1),
+            nn.InstanceNorm2d(in_features),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_features, in_features, 3, 1, 1),
+            nn.InstanceNorm2d(in_features)
+        )
+
+    def forward(self, x):
+        return x + self.block(x)
+
+
+class Generator(nn.Module):
+    def __init__(self, input_nc=3, output_nc=3, ngf=64, num_residual_blocks=6):
+        super(Generator, self).__init__()
+        
+        # Initial convolution block
+        self.initial = nn.Sequential(
+            nn.Conv2d(input_nc, ngf, 7, 1, 3),
+            nn.InstanceNorm2d(ngf),
+            nn.ReLU(inplace=True)
+        )
+        
+        # List to hold downsampling layers
+        self.downsampling = nn.ModuleList()
+        self.residual_blocks = nn.ModuleList()
+        self.upsampling = nn.ModuleList()
+        
+        # Initial resolution is 4x4, so calculate number of downsamplings needed
+        # For progressive growing up to 256x256, we need log2(256/4) = 6 steps
+        num_downsampling = int(math.log2(256 // 4))
+        
+        in_features = ngf
+        out_features = in_features * 2
+        for _ in range(num_downsampling):
+            self.downsampling.append(
+                nn.Sequential(
+                    nn.Conv2d(in_features, out_features, 3, 2, 1),
+                    nn.InstanceNorm2d(out_features),
+                    nn.ReLU(inplace=True)
+                )
+            )
+            in_features = out_features
+            out_features = in_features * 2
+        
+        # Add residual blocks
+        for _ in range(num_residual_blocks):
+            self.residual_blocks.append(ResidualBlock(in_features))
+        
+        # List to hold upsampling layers
+        in_features = in_features
+        out_features = in_features // 2
+        for _ in range(num_downsampling):
+            self.upsampling.append(
+                nn.Sequential(
+                    nn.Upsample(scale_factor=2, mode='nearest'),
+                    nn.Conv2d(in_features, out_features, 3, 1, 1),
+                    nn.InstanceNorm2d(out_features),
+                    nn.ReLU(inplace=True)
+                )
+            )
+            in_features = out_features
+            out_features = in_features // 2
+        
+        # Output layer
+        self.output = nn.Sequential(
+            nn.Conv2d(ngf, output_nc, 7, 1, 3),
+            nn.Tanh()
+        )
+        
+        # Initialize current resolution
+        self.current_resolution = 4
+        self.max_resolution = 256
+
+    def forward(self, x, steps):
+        """
+        Args:
+            x (Tensor): Input image.
+            steps (int): Current step indicating the resolution level.
+        """
+        out = self.initial(x)
+        
+        # Downsample to the current resolution
+        for i in range(steps):
+            out = self.downsampling[i](out)
+        
+        # Apply residual blocks
+        for res_block in self.residual_blocks:
+            out = res_block(out)
+        
+        # Upsample back to the current resolution
+        for i in reversed(range(steps)):
+            out = self.upsampling[i](out)
+        
+        out = self.output(out)
+        return out
+
+
+class Discriminator(nn.Module):
+    def __init__(self, input_nc=3, ndf=64, num_layers=6):
+        super(Discriminator, self).__init__()
+        
+        # Initial convolution block
+        self.initial = nn.Sequential(
+            nn.Conv2d(input_nc, ndf, 4, 2, 1),
+            nn.LeakyReLU(0.2, inplace=True)
+        )
+        
+        # List to hold downsampling layers
+        self.downsampling = nn.ModuleList()
+        
+        in_features = ndf
+        out_features = in_features * 2
+        for _ in range(num_layers):
+            self.downsampling.append(
+                nn.Sequential(
+                    nn.Conv2d(in_features, out_features, 4, 2, 1),
+                    nn.InstanceNorm2d(out_features),
+                    nn.LeakyReLU(0.2, inplace=True)
+                )
+            )
+            in_features = out_features
+            out_features = in_features * 2
+        
+        # Final layers
+        self.final_layers = nn.Sequential(
+            nn.Conv2d(in_features, in_features * 2, 4, 1, 1),
+            nn.InstanceNorm2d(in_features * 2),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(in_features * 2, 1, 4, 1, 1)
+        )
+        
+        # Initialize current resolution
+        self.current_resolution = 4
+        self.max_resolution = 256
+
+    def forward(self, x, steps):
+        """
+        Args:
+            x (Tensor): Input image.
+            steps (int): Current step indicating the resolution level.
+        """
+        out = self.initial(x)
+        
+        # Downsample to the current resolution
+        for i in range(steps):
+            out = self.downsampling[i](out)
+        
+        out = self.final_layers(out)
+        return out
+class Discriminator(nn.Module):
+    def __init__(self, input_nc=3, ndf=64, num_layers=6):
+        super(Discriminator, self).__init__()
+        
+        # Initial convolution block
+        self.initial = nn.Sequential(
+            nn.Conv2d(input_nc, ndf, 4, 2, 1),
+            nn.LeakyReLU(0.2, inplace=True)
+        )
+        
+        # List to hold downsampling layers
+        self.downsampling = nn.ModuleList()
+        
+        in_features = ndf
+        out_features = in_features * 2
+        for _ in range(num_layers):
+            self.downsampling.append(
+                nn.Sequential(
+                    nn.Conv2d(in_features, out_features, 4, 2, 1),
+                    nn.InstanceNorm2d(out_features),
+                    nn.LeakyReLU(0.2, inplace=True)
+                )
+            )
+            in_features = out_features
+            out_features = in_features * 2
+        
+        # Final layers
+        self.final_layers = nn.Sequential(
+            nn.Conv2d(in_features, in_features * 2, 4, 1, 1),
+            nn.InstanceNorm2d(in_features * 2),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(in_features * 2, 1, 4, 1, 1)
+        )
+        
+        # Initialize current resolution
+        self.current_resolution = 4
+        self.max_resolution = 256
+
+    def forward(self, x, steps):
+        """
+        Args:
+            x (Tensor): Input image.
+            steps (int): Current step indicating the resolution level.
+        """
+        out = self.initial(x)
+        
+        # Downsample to the current resolution
+        for i in range(steps):
+            out = self.downsampling[i](out)
+        
+        out = self.final_layers(out)
+        return out
+
+
+# Device configuration
+# device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
+device = torch.device('cpu')
+print(f'Using device: {device}')
+
+# Initialize models
+G_A2B = Generator().to(device)
+G_B2A = Generator().to(device)
+D_A = Discriminator().to(device)
+D_B = Discriminator().to(device)
+
+# Initialize weights
+G_A2B.apply(weights_init_normal)
+G_B2A.apply(weights_init_normal)
+D_A.apply(weights_init_normal)
+D_B.apply(weights_init_normal)
+
+# Loss functions
+criterion_GAN = nn.MSELoss().to(device)
+criterion_cycle = nn.L1Loss().to(device)
+criterion_identity = nn.L1Loss().to(device)
+
+# Optimizers
+optimizer_G = optim.Adam(itertools.chain(G_A2B.parameters(), G_B2A.parameters()), lr=0.0002, betas=(0.5, 0.999))
+optimizer_D_A = optim.Adam(D_A.parameters(), lr=0.0002, betas=(0.5, 0.999))
+optimizer_D_B = optim.Adam(D_B.parameters(), lr=0.0002, betas=(0.5, 0.999))
+
+
+def lambda_rule(epoch, total_epochs):
+    return 1.0 - max(0, epoch - total_epochs) / float(total_epochs + 1)
+
+# Define total epochs per resolution step
+num_epochs_per_resolution = 10  # Adjust as needed
+
+# Learning rate schedulers
+lr_scheduler_G = optim.lr_scheduler.LambdaLR(optimizer_G, lr_lambda=lambda_rule)
+lr_scheduler_D_A = optim.lr_scheduler.LambdaLR(optimizer_D_A, lr_lambda=lambda_rule)
+lr_scheduler_D_B = optim.lr_scheduler.LambdaLR(optimizer_D_B, lr_lambda=lambda_rule)
+
+
+# Define resolutions
+resolutions = [4 * 2**i for i in range(int(math.log2(max_resolution // 4)) + 1)]  # [4,8,16,...,256]
+print("Progressive training resolutions:", resolutions)
+
+# Directory to save generated images and checkpoints
+os.makedirs('images', exist_ok=True)
+os.makedirs('checkpoints', exist_ok=True)
+
+for step, resolution in enumerate(resolutions):
+    print(f"\n=== Training at resolution: {resolution}x{resolution} ===")
+    
+    # Update transformation
+    transform = get_transform(resolution)
+    dataset.transform = transform
+    
+    # Reinitialize DataLoader for the new resolution
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
+    
+    # Train for defined number of epochs at current resolution
+    for epoch in range(num_epochs_per_resolution):
+        epoch_start_time = time.time()
+        G_A2B.train()
+        G_B2A.train()
+        D_A.train()
+        D_B.train()
+        
+        for i, batch in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs_per_resolution}")):
+            real_A = batch['A'].to(device)
+            real_B = batch['B'].to(device)
+            
+            # Adversarial ground truths
+            # Adjust the size based on discriminator's output at current resolution
+            # For PatchGAN, the output size depends on the input size
+            # Here, we'll use MSELoss with targets of 1 and 0
+            # Optionally, adjust the patch size based on resolution
+            # For simplicity, use 1 for global GAN
+            valid = torch.ones(real_A.size(0), 1, 1, 1).to(device)
+            fake = torch.zeros(real_A.size(0), 1, 1, 1).to(device)
+            
+            ##### Generators A2B and B2A #####
+            optimizer_G.zero_grad()
+            
+            # Identity loss
+            loss_identity_A = criterion_identity(G_B2A(real_A, step), real_A) * 5.0
+            loss_identity_B = criterion_identity(G_A2B(real_B, step), real_B) * 5.0
+            
+            # GAN loss
+            fake_B = G_A2B(real_A, step)
+            pred_fake = D_B(fake_B, step)
+            loss_GAN_A2B = criterion_GAN(pred_fake, valid)
+            
+            fake_A = G_B2A(real_B, step)
+            pred_fake = D_A(fake_A, step)
+            loss_GAN_B2A = criterion_GAN(pred_fake, valid)
+            
+            # Cycle loss
+            recovered_A = G_B2A(fake_B, step)
+            loss_cycle_A = criterion_cycle(recovered_A, real_A) * 10.0
+            
+            recovered_B = G_A2B(fake_A, step)
+            loss_cycle_B = criterion_cycle(recovered_B, real_B) * 10.0
+            
+            # Total loss
+            loss_G = loss_identity_A + loss_identity_B + loss_GAN_A2B + loss_GAN_B2A + loss_cycle_A + loss_cycle_B
+            loss_G.backward()
+            optimizer_G.step()
+            
+            ##### Discriminator A #####
+            optimizer_D_A.zero_grad()
+            
+            # Real loss
+            pred_real = D_A(real_A, step)
+            loss_D_real = criterion_GAN(pred_real, valid)
+            
+            # Fake loss
+            pred_fake = D_A(fake_A.detach(), step)
+            loss_D_fake = criterion_GAN(pred_fake, fake)
+            
+            # Total loss
+            loss_D_A_total = (loss_D_real + loss_D_fake) * 0.5
+            loss_D_A_total.backward()
+            optimizer_D_A.step()
+            
+            ##### Discriminator B #####
+            optimizer_D_B.zero_grad()
+            
+            # Real loss
+            pred_real = D_B(real_B, step)
+            loss_D_real = criterion_GAN(pred_real, valid)
+            
+            # Fake loss
+            pred_fake = D_B(fake_B.detach(), step)
+            loss_D_fake = criterion_GAN(pred_fake, fake)
+            
+            # Total loss
+            loss_D_B_total = (loss_D_real + loss_D_fake) * 0.5
+            loss_D_B_total.backward()
+            optimizer_D_B.step()
+        
+        # Update learning rates
+        lr_scheduler_G.step()
+        lr_scheduler_D_A.step()
+        lr_scheduler_D_B.step()
+        
+        epoch_end_time = time.time()
+        print(f"Epoch [{epoch+1}/{num_epochs_per_resolution}] | Loss_G: {loss_G.item():.4f} | Loss_D_A: {loss_D_A_total.item():.4f} | Loss_D_B: {loss_D_B_total.item():.4f} | Time: {epoch_end_time - epoch_start_time:.2f}s")
+        
+        # Save sample images
+        if (epoch + 1) % 5 == 0:
+            G_A2B.eval()
+            G_B2A.eval()
+            with torch.no_grad():
+                sample = next(iter(dataloader))
+                real_A_sample = sample['A'].to(device)
+                real_B_sample = sample['B'].to(device)
+                fake_B_sample = G_A2B(real_A_sample, step)
+                fake_A_sample = G_B2A(real_B_sample, step)
+                
+                # Save images
+                save_image(fake_B_sample, f'images/fake_B_step{step}_epoch{epoch+1}.png', normalize=True)
+                save_image(fake_A_sample, f'images/fake_A_step{step}_epoch{epoch+1}.png', normalize=True)
+        
+        # Save model checkpoints
+        if (epoch + 1) % 5 == 0:
+            save_checkpoint({'epoch': epoch, 'state_dict': G_A2B.state_dict(), 'optimizer': optimizer_G.state_dict()}, f'checkpoints/G_A2B_step{step}_epoch{epoch+1}.pth.tar')
+            save_checkpoint({'epoch': epoch, 'state_dict': G_B2A.state_dict(), 'optimizer': optimizer_G.state_dict()}, f'checkpoints/G_B2A_step{step}_epoch{epoch+1}.pth.tar')
+            save_checkpoint({'epoch': epoch, 'state_dict': D_A.state_dict(), 'optimizer': optimizer_D_A.state_dict()}, f'checkpoints/D_A_step{step}_epoch{epoch+1}.pth.tar')
+            save_checkpoint({'epoch': epoch, 'state_dict': D_B.state_dict(), 'optimizer': optimizer_D_B.state_dict()}, f'checkpoints/D_B_step{step}_epoch{epoch+1}.pth.tar')
+
+
+
+def compute_fid_score(real_images, generated_images):
+    fid = FrechetInceptionDistance().to(device)
+    fid.update(real_images, real=True)
+    fid.update(generated_images, real=False)
+    return fid.compute().item()
+
+
+def compute_inception_score_metric(images, splits=10):
+    is_metric = InceptionScore().to(device)
+    return is_metric(images).item()
+
+
+# Load a batch of real images
+real_batch = next(iter(dataloader))
+real_A = real_batch['A'].to(device)
+real_B = real_batch['B'].to(device)
+
+# Generate fake images using the trained generators
+G_A2B.eval()
+G_B2A.eval()
+with torch.no_grad():
+    fake_B = G_A2B(real_A, step)  # Use the final step
+    fake_A = G_B2A(real_B, step)
+
+# Compute FID
+fid_A2B = compute_fid_score(real_A, fake_B)
+fid_B2A = compute_fid_score(real_B, fake_A)
+print(f'FID A2B: {fid_A2B}')
+print(f'FID B2A: {fid_B2A}')
+
+# Compute Inception Score
+is_A2B = compute_inception_score_metric(fake_B)
+is_B2A = compute_inception_score_metric(fake_A)
+print(f'Inception Score A2B: {is_A2B}')
+print(f'Inception Score B2A: {is_B2A}')
