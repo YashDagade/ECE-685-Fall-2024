@@ -73,15 +73,26 @@ The training follows a progressive approach, starting from low resolutions (e.g.
 
 Sample images generated at various resolutions can be found in the `images` directory:
 
-<div style="display: flex; flex-wrap: wrap; gap: 10px;">
-    <img src="images/fake_B_res4_epoch5.png" width="400" height="50" alt="4x4 Resolution">
-    <img src="images/fake_B_res8_epoch5.png" width="400" height="50" alt="8x8 Resolution">
-    <img src="images/fake_B_res16_epoch5.png" width="400" height="50" alt="16x16 Resolution">
-    <img src="images/fake_B_res32_epoch5.png" width="400" height="50" alt="32x32 Resolution">
-    <img src="images/fake_B_res64_epoch5.png" width="400" height="50" alt="64x64 Resolution">
-    <img src="images/fake_B_res128_epoch5.png" width="400" height="50" alt="128x128 Resolution">
+<div style="display: flex; flex-direction: column; gap: 20px;">
+    <div style="display: flex; gap: 10px;">
+        <img src="images/fake_B_res4_epoch5.png" width="800" height="100" alt="4x4 Resolution">
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <img src="images/fake_B_res8_epoch5.png" width="800" height="100" alt="8x8 Resolution">
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <img src="images/fake_B_res16_epoch5.png" width="800" height="100" alt="16x16 Resolution">
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <img src="images/fake_B_res32_epoch5.png" width="800" height="100" alt="32x32 Resolution">
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <img src="images/fake_B_res64_epoch5.png" width="800" height="100" alt="64x64 Resolution">
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <img src="images/fake_B_res128_epoch5.png" width="800" height="100" alt="128x128 Resolution">
+    </div>
 </div>
-
 
 ## Acknowledgements
 
