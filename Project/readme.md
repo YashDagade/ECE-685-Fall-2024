@@ -94,6 +94,31 @@ Sample images generated at various resolutions can be found in the `images` dire
     </div>
 </div>
 
+
+And here are the images the other way around
+
+
+<div style="display: flex; flex-direction: column; gap: 20px;">
+    <div style="display: flex; gap: 10px;">
+        <img src="images/fake_A_res4_epoch5.png" width="800" height="100" alt="4x4 Resolution">
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <img src="images/fake_A_res8_epoch5.png" width="800" height="100" alt="8x8 Resolution">
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <img src="images/fake_A_res16_epoch5.png" width="800" height="100" alt="16x16 Resolution">
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <img src="images/fake_A_res32_epoch5.png" width="800" height="100" alt="32x32 Resolution">
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <img src="images/fake_A_res64_epoch5.png" width="800" height="100" alt="64x64 Resolution">
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <img src="images/fake_A_res128_epoch5.png" width="800" height="100" alt="128x128 Resolution">
+    </div>
+</div>
+
 ## Acknowledgements
 
 Heavily relied on these papers and their accompanying github repos :D
